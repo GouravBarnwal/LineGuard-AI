@@ -18,6 +18,9 @@ RUNS_DIR = ROOT / "data" / "processed" / "video" / "api_runs"
 MAX_VIDEO_BYTES = 100 * 1024 * 1024
 ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
 
+# Process every second frame to reduce YOLO inference work.
+VIDEO_FRAME_STRIDE = 2
+
 FRONTEND_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
@@ -113,10 +116,12 @@ def inspect_video(file: UploadFile = File(...)):
                 detail="Could not read the video dimensions.",
             )
 
+        output_fps = max(1.0, fps / VIDEO_FRAME_STRIDE)
+
         writer = cv2.VideoWriter(
             str(annotated_path),
             cv2.VideoWriter_fourcc(*"mp4v"),
-            fps,
+            output_fps,
             (width, height),
         )
 
@@ -139,6 +144,7 @@ def inspect_video(file: UploadFile = File(...)):
                 imgsz=640,
                 device="cpu",
                 stream=True,
+                vid_stride=VIDEO_FRAME_STRIDE,
                 save=False,
                 verbose=False,
             )
