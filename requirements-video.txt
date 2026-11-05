@@ -4,3 +4,6 @@ python-multipart
 ultralytics
 imageio-ffmpeg
 lap>=0.5.12
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.15.0+cpu
+torchvision==0.29.2+cpu
