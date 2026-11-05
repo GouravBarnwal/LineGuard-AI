@@ -1,0 +1,23 @@
+:root {
+  font-family: Inter, "Segoe UI", sans-serif;
+  color: #e8eef2;
+  background: #10171b;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  font-smooth: always;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
