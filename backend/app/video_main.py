@@ -11,7 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from ultralytics import YOLO
 
-
 ROOT = Path(__file__).resolve().parents[2]
 MODEL_PATH = ROOT / "models" / "yolo11n_candle_video_best.pt"
 RUNS_DIR = ROOT / "data" / "processed" / "video" / "api_runs"
@@ -137,7 +136,7 @@ def inspect_video(file: UploadFile = File(...)):
                 source=str(input_path),
                 tracker="bytetrack.yaml",
                 conf=0.10,
-                imgsz=960,
+                imgsz=640,
                 device="cpu",
                 stream=True,
                 save=False,
@@ -154,8 +153,7 @@ def inspect_video(file: UploadFile = File(...)):
                     if boxes.id is not None:
                         frames_with_tracks += 1
                         track_ids.update(
-                            int(track_id)
-                            for track_id in boxes.id.cpu().tolist()
+                            int(track_id) for track_id in boxes.id.cpu().tolist()
                         )
 
                 writer.write(result.plot())
