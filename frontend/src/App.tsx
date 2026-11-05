@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { Client, handle_file } from "@gradio/client";
 import "./App.css";
 
 type HealthResponse = {
@@ -17,31 +18,23 @@ type InspectionResponse = {
   overlay_data_url: string;
 };
 
-type VideoInspectionResponse = {
+type VideoInspectionResult = {
   filename: string;
-  frames_processed: number;
-  detections: number;
-  frames_with_tracks: number;
-  track_ids: number[];
   video_url: string;
+  summary: string;
 };
 
 type Mode = "image" | "video";
 
-const IMAGE_API =
-  import.meta.env.VITE_IMAGE_API_URL || "http://127.0.0.1:8000";
+const IMAGE_API = import.meta.env.VITE_IMAGE_API_URL || "http://127.0.0.1:8000";
 
-const VIDEO_API =
-  import.meta.env.VITE_VIDEO_API_URL || "http://127.0.0.1:8001";
-  
+const HF_SPACE_ID = "Grv6509/lineguard-video-worker";
+
 function App() {
   const [mode, setMode] = useState<Mode>("image");
 
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [apiOffline, setApiOffline] = useState(false);
-
-  const [videoApiConnected, setVideoApiConnected] = useState(false);
-  const [videoApiOffline, setVideoApiOffline] = useState(false);
 
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<InspectionResponse | null>(null);
@@ -49,8 +42,9 @@ function App() {
   const [uploading, setUploading] = useState(false);
 
   const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [videoResult, setVideoResult] =
-    useState<VideoInspectionResponse | null>(null);
+  const [videoResult, setVideoResult] = useState<VideoInspectionResult | null>(
+    null,
+  );
   const [videoError, setVideoError] = useState<string | null>(null);
   const [videoUploading, setVideoUploading] = useState(false);
 
@@ -66,18 +60,6 @@ function App() {
       .catch((caught: unknown) => {
         if (!(caught instanceof Error && caught.name === "AbortError")) {
           setApiOffline(true);
-        }
-      });
-
-    fetch(`${VIDEO_API}/health`, { signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) throw new Error("Video API health check failed");
-        return response.json() as Promise<HealthResponse>;
-      })
-      .then((data) => setVideoApiConnected(data.status === "ok"))
-      .catch((caught: unknown) => {
-        if (!(caught instanceof Error && caught.name === "AbortError")) {
-          setVideoApiOffline(true);
         }
       });
 
@@ -128,23 +110,40 @@ function App() {
     setVideoError(null);
     setVideoResult(null);
 
-    const formData = new FormData();
-    formData.append("file", videoFile);
-
     try {
-      const response = await fetch(`${VIDEO_API}/v1/inspect-video`, {
-        method: "POST",
-        body: formData,
-      });
-      const data = (await response.json()) as VideoInspectionResponse & {
-        detail?: string;
-      };
+      const space = await Client.connect(HF_SPACE_ID);
+      const response = await space.predict("/inspect_video", [
+        handle_file(videoFile),
+      ]);
 
-      if (!response.ok) {
-        throw new Error(data.detail ?? "Video inspection failed.");
+      const outputs = response.data as unknown[];
+      const videoOutput = outputs[0];
+      const summaryOutput = outputs[1];
+
+      let videoUrl: string | undefined;
+
+      if (typeof videoOutput === "string") {
+        videoUrl = videoOutput;
+      } else if (videoOutput && typeof videoOutput === "object") {
+        const outputFile = videoOutput as {
+          url?: string;
+          path?: string;
+        };
+        videoUrl = outputFile.url ?? outputFile.path;
       }
 
-      setVideoResult(data);
+      if (!videoUrl || !/^https?:\/\//i.test(videoUrl)) {
+        throw new Error("The video worker returned no playable video URL.");
+      }
+
+      setVideoResult({
+        filename: videoFile.name,
+        video_url: videoUrl,
+        summary:
+          typeof summaryOutput === "string"
+            ? summaryOutput
+            : "Inspection finished.",
+      });
     } catch (caught: unknown) {
       setVideoError(
         caught instanceof Error ? caught.message : "Video inspection failed.",
@@ -153,13 +152,6 @@ function App() {
       setVideoUploading(false);
     }
   }
-
-  const annotatedVideoUrl = videoResult
-    ? `${VIDEO_API}${videoResult.video_url.replace(
-        "/annotated.mp4",
-        "/annotated_h264.mp4",
-      )}`
-    : "";
 
   return (
     <main className="page">
@@ -191,28 +183,30 @@ function App() {
         <article className="card">
           <p className="eyebrow">IMAGE API</p>
           <h2 className={imageApiConnected ? "online" : "offline"}>
-            {imageApiConnected ? "Connected" : apiOffline ? "Offline" : "Checking…"}
+            {imageApiConnected
+              ? "Connected"
+              : apiOffline
+                ? "Offline"
+                : "Checking…"}
           </h2>
           <p>U-Net image inspection · port 8000</p>
         </article>
 
         <article className="card">
-          <p className="eyebrow">VIDEO API</p>
-          <h2 className={videoApiConnected ? "online" : "offline"}>
-            {videoApiConnected
-              ? "Connected"
-              : videoApiOffline
-                ? "Offline"
-                : "Checking…"}
-          </h2>
-          <p>YOLO11 + ByteTrack · port 8001</p>
+          <p className="eyebrow">VIDEO WORKER</p>
+          <h2 className="online">ZeroGPU</h2>
+          <p>YOLO11 + ByteTrack · Hugging Face Space</p>
         </article>
       </section>
 
       <section className="inspection">
         <p className="eyebrow">INSPECTION WORKSPACE</p>
 
-        <div className="mode-switch" role="tablist" aria-label="Inspection type">
+        <div
+          className="mode-switch"
+          role="tablist"
+          aria-label="Inspection type"
+        >
           <button
             className={`mode-button ${mode === "image" ? "active" : ""}`}
             type="button"
@@ -279,7 +273,8 @@ function App() {
                 </p>
                 <p>
                   Predicted defect area: {result.defect_area_percent}% · Max
-                  probability: {(result.max_defect_probability * 100).toFixed(1)}%
+                  probability:{" "}
+                  {(result.max_defect_probability * 100).toFixed(1)}%
                 </p>
                 <img
                   src={result.overlay_data_url}
@@ -292,9 +287,7 @@ function App() {
         ) : (
           <>
             <h2>Inspect a product video</h2>
-            <p className="upload-hint">
-              MP4, AVI, MOV, MKV, or WebM · 100 MB maximum
-            </p>
+            <p className="upload-hint">MP4, AVI, MOV, MKV, or WebM</p>
 
             <form className="upload-form" onSubmit={handleVideoUpload}>
               <label className="file-choice">
@@ -313,7 +306,7 @@ function App() {
               <button
                 className="inspect-button"
                 type="submit"
-                disabled={!videoFile || !videoApiConnected || videoUploading}
+                disabled={!videoFile || videoUploading}
               >
                 {videoUploading ? "Inspecting video…" : "Inspect video"}
               </button>
@@ -328,20 +321,13 @@ function App() {
             {videoResult && (
               <div className="result-panel" role="status">
                 <strong>Video inspection complete</strong>
-                <p>
-                  {videoResult.filename} · {videoResult.frames_processed} frames
-                  processed
-                </p>
-                <p>
-                  {videoResult.detections} detections ·{" "}
-                  {videoResult.frames_with_tracks} frames with tracks · Track
-                  IDs: {videoResult.track_ids.join(", ") || "none"}
-                </p>
+                <p>{videoResult.filename}</p>
+                <p>{videoResult.summary}</p>
                 <video
                   className="inspection-video"
                   controls
                   preload="metadata"
-                  src={annotatedVideoUrl}
+                  src={videoResult.video_url}
                 >
                   Your browser does not support video playback.
                 </video>
